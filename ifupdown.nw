@@ -158,7 +158,7 @@ PERLFILES := defn2c.pl defn2man.pl
 DEFNFILES := inet.defn ipx.defn inet6.defn can.defn
 
 OBJ := main.o addrfam.o execute.o config.o \
-	$(patsubst %.defn,%.o,$(DEFNFILES)) arch$(ARCH).o meta.o
+	$(patsubst %.defn,%.o,$(DEFNFILES)) arch$(ARCH).o meta.o link.o
 
 MAN := $(patsubst %.defn,%.man,$(DEFNFILES))
 DEFNFILES += meta.defn
@@ -501,7 +501,9 @@ typedef struct option_default option_default;
 struct conversion {
 	char *option;
 	char *newoption;
-	void (*fn)(char **);
+	void (*fn)(interface_defn *, char **, int, char **);
+	int argc;
+	char ** argv;
 };
 
 struct option_default {
@@ -897,7 +899,17 @@ if (match($line, "conversion", $indent)) {
 	while (nextline && match($line, "", "$indent  ")) {
 		my $foo = $line;
 		$foo =~ s/^\s+//;
-		my ($option, $fn, $newoption) = split(/ /, $foo);
+		$foo =~ m/^\s*(\S+)\s+(\([^)]+\)|\S+)\s*(\S+)?\s*$/;
+		my $option = $1;
+		my $fn = $2;
+		my $newoption = $3;
+		if ($fn =~ m/^\((.*)\)$/) {
+			my @params = split(/ /, $1);
+			$fn = shift(@params);
+			$fn .= (", ".scalar(@params).", (char * []){\"".join("\", \"", @params)."\"}");
+		} else {
+			$fn .= ", 0, NULL";
+		}
 		if ($newoption) {
 			$newoption =~ s/^=//;
 			die "Duplicate option use: $newoption (from $method/$option)" if (grep $_ eq $newoption, @variables);
@@ -908,7 +920,7 @@ if (match($line, "conversion", $indent)) {
 		}
 	}
 }
-print "\t\{ NULL, NULL, NULL }\n";
+print "\t\{ NULL, NULL, NULL, 0, NULL }\n";
 print "};\n";
 @
 
@@ -1167,6 +1179,7 @@ headers. Please move along, there's nothing to see here.
 @ 
 
 <<config headers>>=
+#include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -1276,19 +1289,35 @@ struct variable {
 We'll define a function to help us build arrays of these [[variables]].
 It's fairly straightforward: to add a variable, we simply construct
 a new structure and add it at the end of our array of variables,
-increasing the size of the array first if necessary.
+increasing the size of the array first if necessary. [[set_variable]]
+function adds a variable if it doesn't exist yet, or updates one which
+is already set but only if the variable name doesn't end with a question
+mark. If [[set_variable]] didn't do anything to the variable, it returns
+NULL.
 
 <<exported symbols>>=
 variable * set_variable(char *filename, char *name, char *value, 
 		variable **var, int *n_vars, int *max_vars);
 void convert_variables(char *filename, conversion *conversions, 
-		variable **var, int *n_vars, int *max_vars);
+		interface_defn *ifd);
 @
 
 <<config functions>>=
 variable * set_variable(char *filename, char *name, char *value, 
 		variable **var, int *n_vars, int *max_vars)
 {
+	/*
+	 * if name ends with '?', don't update
+	 * the variable if it already exists
+	 */
+	bool dont_update = false;
+
+	size_t len = strlen(name);
+
+	if (name[len - 1] == '?') {
+	    dont_update = true;
+	    len--;
+	}
 	if (strcmp(name, "pre-up") != 0
     	&& strcmp(name, "up") != 0
 	    && strcmp(name, "down") != 0
@@ -1296,12 +1325,16 @@ variable * set_variable(char *filename, char *name, char *value,
 	{
 		int j;
 		for (j = 0; j < *n_vars; j++) {
-			if (strcmp((*var)[j].name, name) == 0)
+			if (strncmpz(name, (*var)[j].name, len) == 0)
 			{
+				if (dont_update) {
+					return NULL;
+				}
+
 				free((*var)[j].value);
 				(*var)[j].value = strdup(value);
-				if (!(*var)[j].name) {
-				    <<report internal error and die>>
+				if (!(*var)[j].value) {
+					<<report internal error and die>>
 				}
 
 				return &((*var)[j]);
@@ -1319,7 +1352,7 @@ variable * set_variable(char *filename, char *name, char *value,
 		*var = new_var;
 	}
 
-	(*var)[*n_vars].name = strdup(name);
+	(*var)[*n_vars].name = strndup(name, len);
 	(*var)[*n_vars].value = strdup(value);
 
 	if (!(*var)[*n_vars].name) {
@@ -1334,22 +1367,33 @@ variable * set_variable(char *filename, char *name, char *value,
 	return &((*var)[(*n_vars) - 1]);
 }
 
-void convert_variables(char *filename, conversion *conversions,
-		variable **var, int *n_vars, int *max_vars)
+void convert_variables(char *filename, conversion *conversions, 
+		interface_defn *ifd)
 {
 	conversion *c;
 	for (c = conversions; c && c->option && c->fn; c++) {
+		if (strcmp(c->option, "iface") == 0) {
+			if (c->newoption) {
+				variable *o = set_variable(filename, c->newoption, ifd->real_iface,
+					&ifd->option, &ifd->n_options, &ifd->max_options);
+				if (o)
+					c->fn(ifd, &o->value, c->argc, c->argv);
+				continue;
+			}
+		}
+
 		int j;
-		for (j = 0; j < *n_vars; j++) {
-			if (strcmp((*var)[j].name, c->option) == 0)
+		for (j = 0; j < ifd->n_options; j++) {
+			if (strcmp(ifd->option[j].name, c->option) == 0)
 			{
 				if (c->newoption) {
-					variable *o = set_variable(filename, c->newoption, (*var)[j].value,
-						var, n_vars, max_vars);
-					c->fn(&o->value);
+					variable *o = set_variable(filename, c->newoption, ifd->option[j].value,
+						&ifd->option, &ifd->n_options, &ifd->max_options);
+					if (o)
+						c->fn(ifd, &o->value, c->argc, c->argv);
 				} else {
-					variable *o = &((*var)[j]);
-					c->fn(&o->value);
+					variable *o = &(ifd->option[j]);
+					c->fn(ifd, &o->value, c->argc, c->argv);
 				}
 			}
 		}
@@ -2567,12 +2611,12 @@ child's environment as discussed previously, and we make use of two
 external globals, [[no_act]] and [[verbose]] and modify our behaviour
 based on those.
 
-<<execute function declarations>>=
-static int doit(char *str);
+<<exported symbols>>=
+int doit(char *str);
 @
 
 <<execute functions>>=
-static int doit(char *str) {
+int doit(char *str) {
 	assert(str);
 
 	if (verbose || no_act) {
@@ -3092,7 +3136,7 @@ The slightly tricky thing we do here is use a [[strncmpz]] function,
 which allows us to check that a string represented by a [[char*]] and
 a length is the same as a [[NUL]] terminated string.
 
-<<execute function declarations>>=
+<<exported symbols>>=
 int strncmpz(char *l, char *r, size_t llen);
 @ 
 
@@ -3876,6 +3920,7 @@ Bringing an interface up or taking it down can be done thusly:
 
 	for (currif = defn->ifaces; currif; currif = currif->next) {
 		if (strcmp(liface, currif->logical_iface) == 0) {
+			<<configure the link>>
 			okay = 1;
 
 			<<add default options to [[currif]]>>
@@ -3892,6 +3937,8 @@ Bringing an interface up or taking it down can be done thusly:
 		}
 	}
 
+	<<deconfigure the link>>
+
 	if (!okay && !force) {
 		fprintf(stderr, "Ignoring unknown interface %s=%s.\n", 
 			iface, liface);
@@ -3901,6 +3948,40 @@ Bringing an interface up or taking it down can be done thusly:
 	}
 }
 @
+
+<<configure the link>>=
+	if (!okay && <<we're bringing interfaces up>>) {
+		interface_defn link = {
+		    .real_iface = iface,
+		    .max_options = 0,
+		    .address_family = &addr_link,
+		    .method = &(addr_link.method[0]),
+		    .n_options = 0,
+		    .option = NULL
+		};
+		convert_variables(argv[0], link.method->conversions, &link);
+
+		if (!link.method->up(&link, doit)) break;
+		if (link.option) free(link.option);
+	}
+@ 
+
+<<deconfigure the link>>=
+	if (okay && <<we're taking interfaces down>>) {
+		interface_defn link = {
+		    .real_iface = iface,
+		    .max_options = 0,
+		    .address_family = &addr_link,
+		    .method = &(addr_link.method[0]),
+		    .n_options = 0,
+		    .option = NULL
+		};
+		convert_variables(argv[0], link.method->conversions, &link);
+
+		if (!link.method->down(&link, doit)) break;
+		if (link.option) free(link.option);
+	}
+@ 
 
 <<create pidfile>>=
 {
@@ -4063,9 +4144,7 @@ Convert the options:
 
 <<convert options>>=
 {
-	convert_variables(argv[0], currif->method->conversions,
-		&currif->option, &currif->n_options,
-		&currif->max_options);
+	convert_variables(argv[0], currif->method->conversions, currif);
 }
 @
 
@@ -4165,7 +4244,7 @@ interface down while it's investigating matters), we need to maintain a
 statefile between invocations to keep track of which physical interfaces
 were mapped to which logical ones.  This file also serves to record
 which interfaces have been configured so far, and which haven't.  It
-is stored in [[/etc/network/run/ifstate]].
+is stored in [[/run/network/ifstate]].
 
 Because different interfaces may be brought up and down at the same time,
 it's important that all updates to the state file are atomic and that we
@@ -4449,17 +4528,33 @@ interfaces up and down.
 \section{Architecture-dependent functions}
 \subsection{Common functions}
 <<common functions declarations>>=
+#include "header.h"
+
 int execable(char *);
-#define iface_is_link() _iface_is_link(ifd->real_iface)
-int _iface_is_link(char *);
-void cleanup_hwaddress(char **pparam);
-void make_hex_address(char **pparam);
+#define iface_is_link() (!_iface_has(ifd->real_iface, ":."))
+#define iface_has(s) _iface_has(ifd->real_iface, (s))
+int _iface_has(char *, char *);
+void cleanup_hwaddress(interface_defn *ifd, char **pparam, int argc, char ** argv);
+void make_hex_address(interface_defn *ifd, char **pparam, int argc, char ** argv);
+void compute_v4_addr(interface_defn *ifd, char **pparam, int argc, char ** argv);
+void compute_v4_mask(interface_defn *ifd, char **pparam, int argc, char ** argv);
+void get_token(interface_defn *ifd, char **pparam, int argc, char ** argv);
 @ 
 
 <<common functions implementations>>=
-int _iface_is_link(char *iface) {
-	int i = !(strchr(iface, ':') || strchr(iface, '.'));
-	return i;
+#ifdef __GNUC__
+#define UNUSED __attribute__((unused))
+#else
+#define UNUSED
+#endif
+
+int _iface_has(char *iface, char *delims) {
+	char _iface[80];
+	strncpy(_iface, iface, sizeof(_iface));
+	_iface[sizeof(_iface) - 1] = 0;
+	strtok(_iface, delims);
+	void * token = strtok(NULL, delims);
+	return (token != NULL);
 }
 
 int execable(char *program) {
@@ -4471,7 +4566,7 @@ int execable(char *program) {
 	return 0;
 }
 
-void cleanup_hwaddress(char **pparam) {
+void cleanup_hwaddress(interface_defn *ifd UNUSED, char **pparam, int argc UNUSED, char ** argv UNUSED) {
 	char *rest = *pparam;
 		/* we're shrinking the text, so no realloc needed */
 	char *space = strchr(rest, ' ');
@@ -4492,7 +4587,7 @@ void cleanup_hwaddress(char **pparam) {
 	}
 }
 
-void make_hex_address(char **pparam)
+void make_hex_address(interface_defn *ifd UNUSED, char **pparam, int argc UNUSED, char ** argv UNUSED)
 {
 	char addrcomp[4];
 	int maxlen = strlen("0000:0000");
@@ -4506,6 +4601,88 @@ void make_hex_address(char **pparam)
 	*pparam = realloc(*pparam, maxlen + 1);
 	snprintf(*pparam, maxlen + 1, "%.2hhx%.2hhx:%.2hhx%.2hhx",
 		addrcomp[0], addrcomp[1], addrcomp[2], addrcomp[3]);
+}
+
+#include <arpa/inet.h>
+
+void compute_v4_addr(interface_defn *ifd UNUSED, char **pparam, int argc UNUSED, char ** argv UNUSED)
+{
+	char s[INET_ADDRSTRLEN * 2 + 2]; /* 2 is for slash and \0 */
+	strncpy(s, *pparam, sizeof(s));
+	s[sizeof(s) - 1] = 0;
+
+	char * token = strtok(s, "/");
+	if (!token) return;
+
+	*pparam = realloc(*pparam, strlen(token) + 1);
+	strcpy(*pparam, token);
+}
+
+void compute_v4_mask(interface_defn *ifd UNUSED, char **pparam, int argc UNUSED, char ** argv UNUSED)
+{
+	char s[INET_ADDRSTRLEN * 2 + 2]; /* 2 is for slash and \0 */
+	strncpy(s, *pparam, sizeof(s));
+	s[sizeof(s) - 1] = 0;
+
+	char * token = strtok(s, "/");
+	if (!token) return;
+
+	uint8_t addr[sizeof(struct in_addr)];
+	struct in_addr mask;
+	if (inet_pton(AF_INET, token, &addr) != 1) return;
+	token = strtok(NULL, "/");
+	int maskwidth = -1;
+	if (!token) {
+		if (addr[0] <= 127) {
+		    maskwidth = 8;
+		} else if ((addr[0] >= 128) && (addr[0] <= 191)) {
+		    maskwidth = 16;
+		} else if ((addr[0] >= 192) && (addr[0] <= 223)) {
+		    maskwidth = 24;
+		} else {
+		    maskwidth = 32;
+		}
+	} else {
+		switch (inet_pton(AF_INET, token, &mask)) {
+			case -1:
+				return;
+
+			case 0:
+				if (sscanf(token, "%d", &maskwidth) != 1) return;
+		}
+	}
+	if (maskwidth != -1) {
+		mask.s_addr = htonl(~((1L << (32 - maskwidth)) - 1));
+	}
+
+	if (inet_ntop(AF_INET, &mask, s, sizeof(s)) == NULL) return;
+	*pparam = realloc(*pparam, strlen(s) + 1);
+	strcpy(*pparam, s);
+}
+
+void get_token(interface_defn *ifd UNUSED, char **pparam, int argc, char ** argv)
+{
+	if (argc == 0) return;
+
+	int token_no;
+	if (argc == 1) {
+		token_no = 0;
+	} else {
+		token_no = atoi(argv[1]);
+	}
+
+	char * s = strdup(*pparam);
+	char * token = strtok(s, argv[0]);
+	while (token_no > 0) {
+		token = strtok(NULL, argv[0]);
+		token_no--;
+	}
+	if (token) {
+	    strcpy(*pparam, token);
+	} else {
+	    *pparam[0] = 0;
+	}
+	free(s);
 }
 
 @ 
@@ -4648,6 +4825,8 @@ method static
 
   conversion
     hwaddress cleanup_hwaddress
+    address compute_v4_mask =netmask?
+    address compute_v4_addr
 
   up
     ip addr add %address%[[/%netmask%]] [[broadcast %broadcast%]] \
@@ -5293,6 +5472,31 @@ method none
 	down
 @ 
 
+\section{Link pseudo address family}
+
+<<exported symbols>>=
+extern address_family addr_link;
+@ 
+
+<<link.defn>>=
+address_family link
+architecture any
+
+method none
+  description
+  conversion
+    iface (get_token . 0) =link
+    iface (get_token . 1) =vlan_id
+  up
+    if test -d /sys/class/net/%link% -a \
+            ! -d /sys/class/net/%iface% ; \
+    then \
+        ip link set up dev %link%; \
+        ip link add link %link% name %iface% type vlan id %vlan_id%; \
+    fi if (iface_has(".") && execable("/sbin/ip"))
+  down
+    ip link del %iface% if (iface_has(".") && execable("/sbin/ip"))
+@ 
 
 \begin{flushleft}
 \bibliography{biblio}
