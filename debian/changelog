@@ -4,6 +4,8 @@ ifupdown (0.7.41) UNRELEASED; urgency=low
   * Don't call dhclient with -1 for now.
   * Assign logical interface name for link pseudointerface on down
     (Closes: #705268).
+  * Add /etc/network/interfaces.d/lo with a loopback interface definition,
+    enable sourcing /etc/network/interfaces.d/* in the default configuration.
 
  -- Andrew Shadura <andrewsh@debian.org>  Thu, 11 Apr 2013 21:44:23 +0200
 
