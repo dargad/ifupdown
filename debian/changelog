@@ -1,3 +1,9 @@
+ifupdown (0.7.49ubuntu1) unstable; urgency=medium
+
+  * Hierarchical locking (LP: #1337873)
+
+ -- Dariusz Gadomski <dariusz.gadomski@canonical.com>  Fri, 12 Dec 2014 09:16:32 +0100
+
 ifupdown (0.7.49) unstable; urgency=medium
 
   [ Andrew Shadura ]

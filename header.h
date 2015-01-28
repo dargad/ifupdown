@@ -13,6 +13,7 @@ typedef struct allowup_defn allowup_defn;
 typedef struct interface_defn interface_defn;
 typedef struct variable variable;
 typedef struct mapping_defn mapping_defn;
+typedef struct interface_hierarchy interface_hierarchy;
 typedef int (execfn)(char *command);
 typedef int (command_set)(interface_defn * ifd, execfn * e);
 struct address_family
@@ -92,6 +93,13 @@ struct mapping_defn
     int n_mappings;
     char **mapping;
 };
+struct interface_hierarchy
+{
+    char *iface;
+    long level;
+    interface_hierarchy *next;
+};
+
 #define MAX_OPT_DEPTH 10
 #define EUNBALBRACK 10001
 #define EUNDEFVAR   10002
@@ -112,6 +120,7 @@ void convert_variables(char *filename, conversion *conversions,
 interfaces_file *read_interfaces(char *filename);
 interfaces_file *read_interfaces_defn(interfaces_file *defn, char *filename);
 allowup_defn *find_allowup(interfaces_file *defn, char *name);
+interface_hierarchy *find_iface_hierarchy(interfaces_file *defn, const char *iface);
 int doit(char *str);
 int execute_options(interface_defn * ifd, execfn * exec, char *opt);
 int execute_scripts(interface_defn * ifd, execfn * exec, char *opt);

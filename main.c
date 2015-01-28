@@ -26,6 +26,8 @@ static void version(char *execname);
 static const char *read_state(const char *argv0, const char *iface);
 static void read_all_state(const char *argv0, char ***ifaces, int *n_ifaces);
 static void update_state(const char *argv0, const char *iface, const char *liface);
+int lock_iface(const char *iface);
+int lock_file(const char *iface);
 bool match_patterns(char *string, int argc, char *argv[])
 {
     if (!argc || !argv || !string)
@@ -108,6 +110,11 @@ static const char *read_state(const char *argv0, const char *iface)
     char buf[80];
     char *p;
 
+    if (verbose > 1)
+        fprintf(stderr, "read_state (%s) (%s)\n", argv0, iface);
+
+    lock_iface(iface);
+
     state_fp = fopen(statefile, no_act ? "r" : "a+");
     if (state_fp == NULL) {
         if (!no_act) {
@@ -162,6 +169,9 @@ static void read_all_state(const char *argv0, char ***ifaces, int *n_ifaces)
     FILE *state_fp;
     char buf[80];
     char *p;
+
+    if (verbose > 1)
+        fprintf(stderr, "read_state (%s)\n", argv0);
 
     state_fp = fopen(statefile, no_act ? "r" : "a+");
     if (state_fp == NULL) {
@@ -222,6 +232,9 @@ static void update_state(const char *argv0, const char *iface, const char *state
     FILE *state_fp;
     char buf[80];
     char *p;
+
+    if (verbose > 1)
+        fprintf(stderr, "update_state (%s) (%s) (%s)\n", argv0, iface, state);
 
     state_fp = fopen(statefile, no_act ? "r" : "a+");
     if (state_fp == NULL) {
@@ -407,7 +420,7 @@ int main(int argc, char **argv)
                 interfaces = strdup(optarg);
                 break;
             case 'v':
-                verbose = 1;
+                verbose++;
                 break;
             case 'a':
                 do_all = 1;
@@ -541,6 +554,27 @@ int main(int argc, char **argv)
     if (!defn) {
         fprintf(stderr, "%s: couldn't read interfaces file \"%s\"\n", argv[0], interfaces);
         exit(1);
+    }
+
+    if (verbose > 1)
+    {
+        char *target_iface = "bond0";
+        interface_defn *ifdefn = defn->ifaces;
+        for (; ifdefn; ifdefn = ifdefn->next)
+        {
+            if ((ifdefn->real_iface && !strcmp(target_iface, ifdefn->real_iface)) ||
+                (ifdefn->logical_iface && !strcmp(target_iface, ifdefn->logical_iface)))
+            {
+                fprintf(stderr, "Hierarchy for %s:\n", target_iface);
+                interface_hierarchy *hierarchy = find_iface_hierarchy(defn,
+                    ifdefn->real_iface ? ifdefn->real_iface : ifdefn->logical_iface);
+                for (; hierarchy; hierarchy = hierarchy->next)
+                {
+                    fprintf(stderr, "\t%s %ld\n", hierarchy->iface, hierarchy->level);
+                }
+                free(hierarchy);
+            }
+        }
     }
 
     if (do_all || list) {
@@ -942,4 +976,29 @@ int main(int argc, char **argv)
     }
 
     return 0;
+}
+
+int lock_iface(const char *iface)
+{
+    if (verbose > 1)
+        fprintf(stderr, "lock_iface %s\n", iface);
+
+    interface_hierarchy *hierarchy = find_iface_hierarchy(defn, iface);
+    if (hierarchy)
+    {
+        for (; hierarchy; hierarchy = hierarchy->next)
+            lock_file(hierarchy->iface);
+    }
+    else
+    {
+        lock_file(iface);
+    }
+
+    free(hierarchy);
+}
+
+int lock_file(const char *iface)
+{
+    if (verbose > 1)
+        fprintf(stderr, "lock_file %s\n", iface);
 }
