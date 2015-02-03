@@ -1,4 +1,4 @@
-ifupdown (0.7.49ubuntu1) unstable; urgency=medium
+ifupdown (0.7.49ubuntu1) trusty; urgency=medium
 
   * Hierarchical locking (LP: #1337873)
 
