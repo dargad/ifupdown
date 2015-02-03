@@ -25,7 +25,7 @@ static void set_environ(interface_defn * iface, char *mode, char *phase)
 {
     char **environend;
     int i;
-    const int n_env_entries = iface->n_options + 8;
+    const int n_env_entries = iface->n_options + 9;
 
     {
         char **ppch;
@@ -74,6 +74,9 @@ static void set_environ(interface_defn * iface, char *mode, char *phase)
     *environend = NULL;
 
     *(environend++) = setlocalenv("%s=%s", "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+    *environend = NULL;
+
+    *(environend++) = setlocalenv("%s=%s", ENV_NO_LOCKING, "");
     *environend = NULL;
 }
 

@@ -31,6 +31,7 @@ static void read_all_state(const char *argv0, char ***ifaces, int *n_ifaces);
 static void update_state(const char *argv0, const char *iface, const char *liface);
 FILE *lock_file(const char *iface);
 static int lock_fd(int fd);
+int is_ancestor(pid_t other_pid);
 bool match_patterns(char *string, int argc, char *argv[])
 {
     if (!argc || !argv || !string)
@@ -1037,20 +1038,17 @@ lock_handle *lock_iface(const char *iface)
 {
     lock_handle *result = NULL;
     FILE *f;
-    FILE *main;
 
     if (verbose > 1)
         fprintf(stderr, "lock_iface %s\n", iface);
 
-    /*main = lock_file("main");*/
-
-    /*if (main == NULL && verbose > 1)*/
-    /*{*/
-        /*fprintf(stderr, "Failed to obtain main lock for %s.\n", iface);*/
-
-        /*if (geteuid() == 0)*/
-            /*exit(2);*/
-    /*}*/
+    if (getenv(ENV_NO_LOCKING))
+    {
+        if (verbose > 1)
+            fprintf(stderr, "locking disabled (env variable %s is set)\n",
+                ENV_NO_LOCKING);
+        return NULL;
+    }
 
     interface_hierarchy *hierarchy = find_iface_hierarchy(defn, iface);
     if (hierarchy)
@@ -1080,9 +1078,6 @@ lock_handle *lock_iface(const char *iface)
     }
 
     free(hierarchy);
-
-    /*if (main)*/
-        /*fclose(main);*/
 
     return result;
 }

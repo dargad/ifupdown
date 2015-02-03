@@ -113,6 +113,7 @@ struct lock_handle
 #define EUNDEFVAR   10002
 #define MAX_VARNAME    32
 #define EUNBALPER   10000
+#define ENV_NO_LOCKING "IFUPDOWNNOLOCK"
 #ifndef RUN_DIR
 #define RUN_DIR "/run/network/"
 #endif
