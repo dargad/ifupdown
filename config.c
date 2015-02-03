@@ -770,6 +770,7 @@ interface_hierarchy *find_iface_hierarchy(interfaces_file *defn, const char *ifa
                         result->iface = iface;
                         result->level = base_level;
                         result->next = NULL;
+                        result->prev = NULL;
                         found_group = 1;
                         break;
                     }
@@ -822,7 +823,10 @@ int insert_into_hierarchy(interface_hierarchy *hierarchy, char *iface, long leve
     new_node->level = level;
 
     prev->next = new_node;
+    new_node->prev = prev;
     new_node->next = hierarchy;
+    if (hierarchy)
+        hierarchy->prev = new_node;
 
     return 0;
 }
