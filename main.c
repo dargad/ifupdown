@@ -143,9 +143,6 @@ static const char *read_state(const char *argv0, const char *iface)
     char buf[80];
     char *p;
 
-    if (verbose > 1)
-        fprintf(stderr, "read_state (%s) (%s)\n", argv0, iface);
-
     lock_fp = lock_state(argv0);
 
     state_fp = fopen(statefile, no_act ? "r" : "a+");
@@ -208,9 +205,6 @@ static void read_all_state(const char *argv0, char ***ifaces, int *n_ifaces)
     FILE *state_fp;
     char buf[80];
     char *p;
-
-    if (verbose > 1)
-        fprintf(stderr, "read_state (%s)\n", argv0);
 
     lock_fp = lock_state(argv0);
 
@@ -279,9 +273,6 @@ static void update_state(const char *argv0, const char *iface, const char *state
     FILE *state_fp;
     char buf[80];
     char *p;
-
-    if (verbose > 1)
-        fprintf(stderr, "update_state (%s) (%s) (%s)\n", argv0, iface, state);
 
     lock_fp = lock_state(argv0);
 
