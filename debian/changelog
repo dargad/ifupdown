@@ -1,3 +1,9 @@
+ifupdown (0.7.49ubuntu2~ppa~lp001) trusty; urgency=medium
+
+  * Separating state files.
+
+ -- Dariusz Gadomski <dariusz.gadomski@canonical.com>  Thu, 23 Apr 2015 09:37:17 +0100
+
 ifupdown (0.7.49ubuntu1) trusty; urgency=medium
 
   * Hierarchical locking (LP: #1337873)
