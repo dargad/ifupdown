@@ -76,7 +76,7 @@ static void set_environ(interface_defn * iface, char *mode, char *phase)
     *(environend++) = setlocalenv("%s=%s", "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
     *environend = NULL;
 
-    *(environend++) = setlocalenv("%s=%s", ENV_NO_LOCKING, "");
+    *(environend++) = setlocalenv("%s=%s", ENV_NO_LOCKING, "1");
     *environend = NULL;
 }
 
