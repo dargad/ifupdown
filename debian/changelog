@@ -1,3 +1,9 @@
+ifupdown (0.7.49ubuntu2~ppa~lp002) trusty; urgency=medium
+
+  * Separated state files locking.
+
+ -- Dariusz Gadomski <dariusz.gadomski@canonical.com>  Mon, 08 Jun 2015 14:47:00 +0200
+
 ifupdown (0.7.49ubuntu2~ppa~lp001) trusty; urgency=medium
 
   * Separating state files.
