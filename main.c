@@ -10,14 +10,21 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <fnmatch.h>
+
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <dirent.h>
+
 int no_act = 0;
 int run_scripts = 1;
 int verbose = 0;
 bool no_loopback = false;
 bool ignore_failures = false;
-char lockfile[] = RUN_DIR ".ifstate.lock";
-char statefile[] = RUN_DIR "ifstate";
-char tmpstatefile[] = RUN_DIR ".ifstate.tmp";
+char statedir[] = RUN_DIR "state/";
+char lockfilepattern[] = RUN_DIR "state/.%s.lock";
+char statefilepattern[] = RUN_DIR "state/%s.state";
+char tmpstatefilepattern[] = RUN_DIR "state/.%s.state.tmp";
 interfaces_file *defn;
 bool match_patterns(char *string, int argc, char *argv[]);
 static void usage(char *execname);
@@ -26,7 +33,9 @@ static void version(char *execname);
 static const char *read_state(const char *argv0, const char *iface);
 static void read_all_state(const char *argv0, char ***ifaces, int *n_ifaces);
 static void update_state(const char *argv0, const char *iface, const char *liface);
+FILE *lock_file(const char *iface);
 static int lock_fd(int fd);
+int is_ancestor(pid_t other_pid);
 bool match_patterns(char *string, int argc, char *argv[])
 {
     if (!argc || !argv || !string)
@@ -101,8 +110,15 @@ static void help(char *execname, int (*cmds) (interface_defn *))
     exit(0);
 }
 
-static FILE * lock_state(const char * argv0) {
+static void check_create_state_dir()
+{
+    mkdir(statedir, 0755);
+}
+
+static FILE * lock_state(const char * argv0, const char * iface) {
     FILE *lock_fp;
+    char lockfile[80];
+    sprintf(lockfile, lockfilepattern, iface);
     lock_fp = fopen(lockfile, no_act ? "r" : "a+");
     if (lock_fp == NULL) {
         if (!no_act) {
@@ -138,13 +154,18 @@ static const char *read_state(const char *argv0, const char *iface)
     FILE *state_fp;
     char buf[80];
     char *p;
+    char statefile[80];
 
-    lock_fp = lock_state(argv0);
+    check_create_state_dir();
+
+    lock_fp = lock_state(argv0, iface);
+
+    sprintf(statefile, statefilepattern, iface);
 
     state_fp = fopen(statefile, no_act ? "r" : "a+");
     if (state_fp == NULL) {
         if (!no_act) {
-            fprintf(stderr, "%s: failed to open statefile %s: %s\n", argv0, statefile, strerror(errno));
+            fprintf(stderr, "%s: failed to open statefile %s: %s (iface: '%s', statefile: '%s')\n", argv0, statefile, strerror(errno), iface, statefile);
             exit(1);
         } else {
             goto noact;
@@ -160,25 +181,12 @@ static const char *read_state(const char *argv0, const char *iface)
         }
     }
 
-    while ((p = fgets(buf, sizeof buf, state_fp)) != NULL) {
-        char *pch;
-
-        pch = buf + strlen(buf) - 1;
-        while (pch > buf && isspace(*pch))
-            pch--;
-        *(pch + 1) = '\0';
-
-        pch = buf;
-        while (isspace(*pch))
-            pch++;
-
-        if (strncmp(iface, pch, strlen(iface)) == 0) {
-            if (pch[strlen(iface)] == '=') {
-                ret = pch + strlen(iface) + 1;
-                break;
-            }
-        }
+    if ((p = fgets(buf, sizeof(buf), state_fp)) != NULL)
+    {
+        buf[79] = '\0';
+        ret = buf + strlen(iface) + 1;
     }
+
 
   noact:
     if (state_fp != NULL) {
@@ -200,47 +208,84 @@ static void read_all_state(const char *argv0, char ***ifaces, int *n_ifaces)
     FILE *lock_fp;
     FILE *state_fp;
     char buf[80];
+    char iface[80];
+    char *sep;
     char *p;
+    char *statefile;
+    DIR *dp;
+    struct dirent *ep;
 
-    lock_fp = lock_state(argv0);
+    check_create_state_dir();
 
-    state_fp = fopen(statefile, no_act ? "r" : "a+");
-    if (state_fp == NULL) {
-        if (!no_act) {
-            fprintf(stderr, "%s: failed to open statefile %s: %s\n", argv0, statefile, strerror(errno));
-            exit(1);
-        } else {
-            goto noact;
+    dp = opendir(statedir);
+
+    if (dp != NULL)
+    {
+        *n_ifaces = 0;
+        *ifaces = NULL;
+
+        while ((ep = readdir(dp)))
+        {
+            if (strcmp(ep->d_name, ".") == 0 || strcmp(ep->d_name, "..") == 0)
+                continue;
+
+            sep = strstr(ep->d_name, ".");
+            if (sep)
+            {
+                int len = sep - ep->d_name;
+                strncpy(iface, ep->d_name, len);
+                iface[len] = '\0';
+            }
+
+            lock_fp = lock_state(argv0, iface);
+
+            statefile = ep->d_name;
+            state_fp = fopen(statefile, no_act ? "r" : "a+");
+            if (state_fp == NULL) {
+                if (!no_act) {
+                    fprintf(stderr, "%s: failed to open statefile %s: %s (iface: '%s')\n", argv0, statefile, strerror(errno), ep->d_name);
+                    exit(1);
+                } else {
+                    goto noact;
+                }
+            }
+
+            if (!no_act) {
+                int flags;
+
+                if ((flags = fcntl(fileno(state_fp), F_GETFD)) < 0 || fcntl(fileno(state_fp), F_SETFD, flags | FD_CLOEXEC) < 0) {
+                    fprintf(stderr, "%s: failed to set FD_CLOEXEC on statefile %s: %s\n", argv0, statefile, strerror(errno));
+                    exit(1);
+                }
+            }
+
+            while ((p = fgets(buf, sizeof buf, state_fp)) != NULL) {
+                char *pch;
+
+                pch = buf + strlen(buf) - 1;
+                while (pch > buf && isspace(*pch))
+                    pch--;
+                *(pch + 1) = '\0';
+
+                pch = buf;
+                while (isspace(*pch))
+                    pch++;
+
+                (*n_ifaces)++;
+                *ifaces = realloc(*ifaces, sizeof(**ifaces) * *n_ifaces);
+                (*ifaces)[(*n_ifaces) - 1] = strdup(pch);
+            }
+
+            if (state_fp != NULL) {
+                fclose(state_fp);
+                state_fp = NULL;
+            }
+
+            if (lock_fp != NULL) {
+                fclose(lock_fp);
+                lock_fp = NULL;
+            }
         }
-    }
-
-    if (!no_act) {
-        int flags;
-
-        if ((flags = fcntl(fileno(state_fp), F_GETFD)) < 0 || fcntl(fileno(state_fp), F_SETFD, flags | FD_CLOEXEC) < 0) {
-            fprintf(stderr, "%s: failed to set FD_CLOEXEC on statefile %s: %s\n", argv0, statefile, strerror(errno));
-            exit(1);
-        }
-    }
-
-    *n_ifaces = 0;
-    *ifaces = NULL;
-
-    while ((p = fgets(buf, sizeof buf, state_fp)) != NULL) {
-        char *pch;
-
-        pch = buf + strlen(buf) - 1;
-        while (pch > buf && isspace(*pch))
-            pch--;
-        *(pch + 1) = '\0';
-
-        pch = buf;
-        while (isspace(*pch))
-            pch++;
-
-        (*n_ifaces)++;
-        *ifaces = realloc(*ifaces, sizeof(**ifaces) * *n_ifaces);
-        (*ifaces)[(*n_ifaces) - 1] = strdup(pch);
     }
 
     for (i = 0; i < ((*n_ifaces) / 2); i++) {
@@ -250,14 +295,9 @@ static void read_all_state(const char *argv0, char ***ifaces, int *n_ifaces)
     }
 
   noact:
-    if (state_fp != NULL) {
-        fclose(state_fp);
-        state_fp = NULL;
-    }
-
-    if (lock_fp != NULL) {
-        fclose(lock_fp);
-        lock_fp = NULL;
+    if (dp != NULL)
+    {
+        closedir(dp);
     }
 }
 
@@ -267,15 +307,20 @@ static void update_state(const char *argv0, const char *iface, const char *state
 
     FILE *lock_fp;
     FILE *state_fp;
-    char buf[80];
     char *p;
+    char statefile[80];
+    char tmpstatefile[80];
 
-    lock_fp = lock_state(argv0);
+    check_create_state_dir();
+
+    lock_fp = lock_state(argv0, iface);
+
+    sprintf(statefile, statefilepattern, iface);
 
     state_fp = fopen(statefile, no_act ? "r" : "a+");
     if (state_fp == NULL) {
         if (!no_act) {
-            fprintf(stderr, "%s: failed to open statefile %s: %s\n", argv0, statefile, strerror(errno));
+            fprintf(stderr, "%s: failed to open statefile %s: %s (iface: '%s', state: '%s')\n", argv0, statefile, strerror(errno), iface, state);
             exit(1);
         } else {
             goto noact;
@@ -291,7 +336,7 @@ static void update_state(const char *argv0, const char *iface, const char *state
         }
 
         if (lock_fd(fileno(state_fp)) < 0) {
-            fprintf(stderr, "%s: failed to lock statefile %s: %s\n", argv0, statefile, strerror(errno));
+            fprintf(stderr, "%s: failed to open statefile %s: %s (iface: '%s', state: '%s')\n", argv0, statefile, strerror(errno), iface, state);
             exit(1);
         }
     }
@@ -299,36 +344,12 @@ static void update_state(const char *argv0, const char *iface, const char *state
     if (no_act)
         goto noact;
 
+    sprintf(tmpstatefile, tmpstatefilepattern, iface);
+
     tmp_fp = fopen(tmpstatefile, "w");
     if (tmp_fp == NULL) {
         fprintf(stderr, "%s: failed to open temporary statefile %s: %s\n", argv0, tmpstatefile, strerror(errno));
         exit(1);
-    }
-
-    while ((p = fgets(buf, sizeof buf, state_fp)) != NULL) {
-        char *pch;
-
-        pch = buf + strlen(buf) - 1;
-        while (pch > buf && isspace(*pch))
-            pch--;
-        *(pch + 1) = '\0';
-
-        pch = buf;
-        while (isspace(*pch))
-            pch++;
-
-        if (strncmp(iface, pch, strlen(iface)) == 0) {
-            if (pch[strlen(iface)] == '=') {
-                if (state != NULL) {
-                    fprintf(tmp_fp, "%s=%s\n", iface, state);
-                    state = NULL;
-                }
-
-                continue;
-            }
-        }
-
-        fprintf(tmp_fp, "%s\n", pch);
     }
 
     if (state != NULL)
@@ -431,6 +452,7 @@ int main(int argc, char **argv)
     int max_options = 0;
     int n_target_ifaces;
     char **target_iface;
+    lock_handle *lock_h = NULL;
 
     {
         int i;
@@ -482,7 +504,7 @@ int main(int argc, char **argv)
                 interfaces = strdup(optarg);
                 break;
             case 'v':
-                verbose = 1;
+                verbose++;
                 break;
             case 'a':
                 do_all = 1;
@@ -680,6 +702,13 @@ int main(int argc, char **argv)
                     liface[sizeof(liface) - 1] = '\0';
                 }
             }
+            if (lock_h)
+            {
+                unlock_iface(lock_h);
+                lock_h = NULL;
+            }
+            if (cmds == iface_up || cmds == iface_down)
+                lock_h = lock_iface(iface);
             current_state = read_state(argv[0], iface);
             if (!force) {
                 {
@@ -1014,6 +1043,184 @@ int main(int argc, char **argv)
             fprintf(stderr, "%s: post-%s script failed.\n", argv[0], &argv[0][2]);
             exit(1);
         }
+    }
+
+    unlock_iface(lock_h);
+
+    return 0;
+}
+
+lock_handle *lock_iface(const char *iface)
+{
+    lock_handle *result = NULL;
+    FILE *f;
+
+    if (getenv(ENV_NO_LOCKING))
+    {
+        if (verbose > 1)
+            fprintf(stderr, "locking disabled (env variable %s is set)\n",
+                ENV_NO_LOCKING);
+        return NULL;
+    }
+
+    interface_hierarchy *hierarchy = find_iface_hierarchy(defn, iface);
+    if (hierarchy)
+    {
+        for (; hierarchy; hierarchy = hierarchy->next)
+        {
+            f = lock_file(hierarchy->iface);
+            if (f)
+            {
+                lock_handle *lock = (lock_handle*) malloc(sizeof(lock_handle));
+                lock->next = result;
+                lock->locked_file = f;
+                result = lock;
+            }
+        }
+    }
+    else
+    {
+        f = lock_file(iface);
+        if (f)
+        {
+            lock_handle *lock = (lock_handle*) malloc(sizeof(lock_handle));
+            lock->next = result;
+            lock->locked_file = f;
+            result = lock;
+        }
+    }
+
+    free(hierarchy);
+
+    return result;
+}
+
+FILE *lock_file(const char *iface)
+{
+    char lock_file[100];
+    struct flock lock;
+    int do_lock = 0;
+
+    sprintf(lock_file, "%s%s.lock", RUN_DIR, iface);
+
+    FILE *f = fopen(lock_file, "a+");
+
+    if (f)
+    {
+        lock.l_type = F_WRLCK;
+        lock.l_whence = SEEK_SET;
+        lock.l_start = 0;
+        lock.l_len = 0;
+
+        if (!fcntl(fileno(f), F_SETLK, &lock))
+        {
+            return f;
+        }
+
+        if (!fcntl(fileno(f), F_GETLK, &lock))
+        {
+            if (lock.l_type == F_UNLCK)
+            {
+                // lock may be placed
+                do_lock = 1;
+            }
+            else
+            {
+                // lock already holded
+                // check if it holded by a parent process
+                if (!is_ancestor(lock.l_pid))
+                    do_lock = 1;
+                else
+                    if (verbose > 1)
+                        fprintf(stderr, "Inherited lock (%s), not locking again\n.", iface);
+            }
+        }
+
+        if (do_lock)
+        {
+            lock.l_type = F_WRLCK;
+            lock.l_whence = SEEK_SET;
+            lock.l_start = 0;
+            lock.l_len = 0;
+
+            if (fcntl(fileno(f), F_SETLKW, &lock))
+            {
+                fprintf(stderr, "Failed to take lock for %s: %s\n",
+                    iface, strerror(errno));
+                fclose(f);
+                return NULL;
+            }
+        }
+
+        return f;
+    }
+
+    if (verbose > 1)
+        fprintf(stderr, "lock_file failed to lock %s (%s): %s\n", iface, lock_file, strerror(errno));
+
+    return NULL;
+}
+
+int unlock_iface(lock_handle *handle)
+{
+    lock_handle *prev = NULL;
+
+    if (!handle)
+        return 1;
+
+    for (; handle; handle = handle->next)
+    {
+        flock(fileno(handle->locked_file), LOCK_UN);
+        fclose(handle->locked_file);
+        free(prev);
+        prev = handle;
+    }
+
+    free(prev);
+
+    return 0;
+}
+
+pid_t getppid_of(pid_t pid)
+{
+    const int BUFSIZE = 100;
+    char path[100];
+    char buf[BUFSIZE+1];
+    char *s;
+    FILE *status_file;
+    pid_t result = -1;
+    sprintf(path, "/proc/%d/status", pid);
+
+    status_file = fopen(path, "r");
+
+    if (status_file == NULL)
+    {
+        fprintf(stderr, "Can't open status for pid %d\n", pid);
+        return -1;
+    }
+
+    while ((s = fgets(buf, BUFSIZE, status_file)) != NULL)
+    {
+        if (strstr(s, "PPid:\t") == s)
+        {
+            result = strtol(s+6, NULL, 10);
+            break;
+        }
+    }
+
+    fclose(status_file);
+
+    return result;
+}
+
+int is_ancestor(pid_t other_pid)
+{
+    pid_t pid = getpid();
+
+    for (; pid > 1; pid = getppid_of(pid))
+    {
+        if (pid == other_pid)
+            return 1;
     }
 
     return 0;

@@ -19,6 +19,11 @@ allowup_defn *get_allowup(allowup_defn ** allowups, char *name);
 allowup_defn *add_allow_up(char *filename, int line,
     allowup_defn * allow_up, char *iface_name);
 
+int parse_group(allowup_defn *allow_ups, long *group, long *level);
+int insert_into_hierarchy(interface_hierarchy *hierarchy,
+    char *iface, long level);
+
+
 variable *set_variable(char *filename, char *name, char *value,
     variable ** var, int *n_vars, int *max_vars)
 {
@@ -449,6 +454,7 @@ interfaces_file *read_interfaces_defn(interfaces_file * defn, char *filename)
                 if (!add_allow_up(filename, line, allow_ups, firstword))
                     return NULL;
             }
+
             currently_processing = NONE;
         } else {
             switch (currently_processing) {
@@ -707,4 +713,118 @@ allowup_defn *add_allow_up(char *filename, int line, allowup_defn * allow_up, ch
     allow_up->interfaces[allow_up->n_interfaces] = strdup(iface_name);
     allow_up->n_interfaces++;
     return allow_up;
+}
+
+int parse_group(allowup_defn *allow_ups, long *group, long *level)
+{
+    char *next;
+    char *sep = strchr(allow_ups->when, '-');
+
+    if (group == NULL || level == NULL)
+        return -1;
+
+    if (!sep)
+    {
+        *group = -1;
+        *level = -1;
+        return -1;
+    }
+
+    *group = strtol(sep+1, &next, 10);
+    *level = strtol(next+1, NULL, 10);
+
+    if (*group == 0L || *level == 0L)
+    {
+        *group = -1;
+        *level = -1;
+        return -1;
+    }
+
+    return 0;
+}
+
+interface_hierarchy *find_iface_hierarchy(interfaces_file *defn, const char *iface)
+{
+    interface_hierarchy *result=NULL;
+    int iface_num;
+    long base_group;
+    long base_level;
+    long group;
+    long level;
+    int found_group = 0;
+
+    allowup_defn *allowups = defn->allowups;
+    for (; allowups && !found_group; allowups = allowups->next) {
+        if (strncmp(allowups->when, "group-", 6) == 0)
+        {
+            for(iface_num=0; iface_num<allowups->n_interfaces; ++iface_num)
+            {
+                if (iface && !strcmp(allowups->interfaces[iface_num], iface))
+                {
+                    if (!parse_group(allowups, &base_group, &base_level))
+                    {
+                        // identified group of the interface in question
+                        result = malloc(sizeof(interface_hierarchy));
+                        result->iface = iface;
+                        result->level = base_level;
+                        result->next = NULL;
+                        result->prev = NULL;
+                        found_group = 1;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (found_group)
+    {
+        allowup_defn *allowups = defn->allowups;
+        for (; allowups ; allowups = allowups->next) {
+            if (strncmp(allowups->when, "group-", 6) == 0)
+            {
+                if (!parse_group(allowups, &group, &level))
+                {
+                    if (group == base_group && level > base_level)
+                    {
+                        for(iface_num=0; iface_num<allowups->n_interfaces; ++iface_num)
+                        {
+                            insert_into_hierarchy(result, allowups->interfaces[iface_num], level);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+int insert_into_hierarchy(interface_hierarchy *hierarchy, char *iface, long level)
+{
+    interface_hierarchy *prev = hierarchy;
+    interface_hierarchy *new_node;
+
+    while (hierarchy)
+    {
+        if (hierarchy->level > level ||
+            (hierarchy->level == level && strcmp(hierarchy->iface, iface) > 0))
+            break;
+
+        prev = hierarchy;
+        hierarchy = hierarchy->next;
+    }
+
+    new_node = (interface_hierarchy*)malloc(sizeof(interface_hierarchy));
+    // the iface string lives long enough, so it's not necessary to make a copy
+    new_node->iface = iface;
+    new_node->level = level;
+
+    prev->next = new_node;
+    new_node->prev = prev;
+    new_node->next = hierarchy;
+    if (hierarchy)
+        hierarchy->prev = new_node;
+
+    return 0;
 }
