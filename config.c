@@ -446,12 +446,10 @@ interfaces_file *read_interfaces_defn(interfaces_file * defn, char *filename)
             currently_processing = NONE;
         } else if (strncmp(firstword, "allow-", 6) == 0 && strlen(firstword) > 6) {
             allowup_defn *allow_ups = get_allowup(&defn->allowups, firstword + 6);
-
             if (!allow_ups) {
                 perror(filename);
                 return NULL;
             }
-
             while ((rest = next_word(rest, firstword, 80))) {
                 if (!add_allow_up(filename, line, allow_ups, firstword))
                     return NULL;

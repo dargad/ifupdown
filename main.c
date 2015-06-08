@@ -163,7 +163,7 @@ static const char *read_state(const char *argv0, const char *iface)
     state_fp = fopen(statefile, no_act ? "r" : "a+");
     if (state_fp == NULL) {
         if (!no_act) {
-            fprintf(stderr, "%s: 1 failed to open statefile %s: %s (iface: '%s', statefile: '%s')\n", argv0, statefile, strerror(errno), iface, statefile);
+            fprintf(stderr, "%s: failed to open statefile %s: %s (iface: '%s', statefile: '%s')\n", argv0, statefile, strerror(errno), iface, statefile);
             exit(1);
         } else {
             goto noact;
@@ -231,7 +231,7 @@ static void read_all_state(const char *argv0, char ***ifaces, int *n_ifaces)
             state_fp = fopen(statefile, no_act ? "r" : "a+");
             if (state_fp == NULL) {
                 if (!no_act) {
-                    fprintf(stderr, "%s: 2 failed to open statefile %s: %s (iface: '%s')\n", argv0, statefile, strerror(errno), ep->d_name);
+                    fprintf(stderr, "%s: failed to open statefile %s: %s (iface: '%s')\n", argv0, statefile, strerror(errno), ep->d_name);
                     exit(1);
                 } else {
                     goto noact;
@@ -308,7 +308,7 @@ static void update_state(const char *argv0, const char *iface, const char *state
     state_fp = fopen(statefile, no_act ? "r" : "a+");
     if (state_fp == NULL) {
         if (!no_act) {
-            fprintf(stderr, "%s: 3 failed to open statefile %s: %s (iface: '%s', state: '%s')\n", argv0, statefile, strerror(errno), iface, state);
+            fprintf(stderr, "%s: failed to open statefile %s: %s (iface: '%s', state: '%s')\n", argv0, statefile, strerror(errno), iface, state);
             exit(1);
         } else {
             goto noact;
@@ -324,7 +324,7 @@ static void update_state(const char *argv0, const char *iface, const char *state
         }
 
         if (lock_fd(fileno(state_fp)) < 0) {
-            fprintf(stderr, "%s: 4 failed to open statefile %s: %s (iface: '%s', state: '%s')\n", argv0, statefile, strerror(errno), iface, state);
+            fprintf(stderr, "%s: failed to open statefile %s: %s (iface: '%s', state: '%s')\n", argv0, statefile, strerror(errno), iface, state);
             exit(1);
         }
     }
@@ -1043,9 +1043,6 @@ lock_handle *lock_iface(const char *iface)
     lock_handle *result = NULL;
     FILE *f;
 
-    if (verbose > 1)
-        fprintf(stderr, "lock_iface %s\n", iface);
-
     if (getenv(ENV_NO_LOCKING))
     {
         if (verbose > 1)
@@ -1093,9 +1090,6 @@ FILE *lock_file(const char *iface)
     int do_lock = 0;
 
     sprintf(lock_file, "%s%s.lock", RUN_DIR, iface);
-
-    if (verbose > 1)
-        fprintf(stderr, "lock_file %s (%s)\n", iface, lock_file);
 
     FILE *f = fopen(lock_file, "a+");
 
@@ -1159,16 +1153,11 @@ int unlock_iface(lock_handle *handle)
 {
     lock_handle *prev = NULL;
 
-    if (verbose > 1)
-        fprintf(stderr, "unlock_iface\n");
-
     if (!handle)
         return 1;
 
     for (; handle; handle = handle->next)
     {
-        if (verbose > 1)
-            fprintf(stderr, "unlock_iface ->\n");
         flock(fileno(handle->locked_file), LOCK_UN);
         fclose(handle->locked_file);
         free(prev);
