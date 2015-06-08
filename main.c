@@ -21,9 +21,9 @@ int run_scripts = 1;
 int verbose = 0;
 bool no_loopback = false;
 bool ignore_failures = false;
-char lockfile[] = RUN_DIR ".ifstate.lock";
 char statedir[] = RUN_DIR "state/";
 char statefilepattern[] = RUN_DIR "state/%s.state";
+char lockfilepattern[] = RUN_DIR "state/.%s.lock";
 char tmpstatefilepattern[] = RUN_DIR "state/.%s.state.tmp";
 interfaces_file *defn;
 bool match_patterns(char *string, int argc, char *argv[]);
@@ -115,8 +115,10 @@ static void check_create_state_dir()
     mkdir(statedir, 0755);
 }
 
-static FILE * lock_state(const char * argv0) {
+static FILE * lock_state(const char * argv0, const char * iface) {
     FILE *lock_fp;
+    char lockfile[80];
+    sprintf(lockfile, lockfilepattern, iface);
     lock_fp = fopen(lockfile, no_act ? "r" : "a+");
     if (lock_fp == NULL) {
         if (!no_act) {
@@ -156,7 +158,7 @@ static const char *read_state(const char *argv0, const char *iface)
 
     check_create_state_dir();
 
-    lock_fp = lock_state(argv0);
+    lock_fp = lock_state(argv0, iface);
 
     sprintf(statefile, statefilepattern, iface);
 
@@ -206,12 +208,12 @@ static void read_all_state(const char *argv0, char ***ifaces, int *n_ifaces)
     FILE *lock_fp;
     FILE *state_fp;
     char buf[80];
+    char iface[80];
+    char *sep;
     char *p;
     char *statefile;
     DIR *dp;
     struct dirent *ep;
-
-    lock_fp = lock_state(argv0);
 
     check_create_state_dir();
 
@@ -226,6 +228,16 @@ static void read_all_state(const char *argv0, char ***ifaces, int *n_ifaces)
         {
             if (strcmp(ep->d_name, ".") == 0 || strcmp(ep->d_name, "..") == 0)
                 continue;
+
+            sep = strstr(ep->d_name, ".");
+            if (sep)
+            {
+                int len = sep - ep->d_name;
+                strncpy(iface, ep->d_name, len);
+                iface[len] = '\0';
+            }
+
+            lock_fp = lock_state(argv0, iface);
 
             statefile = ep->d_name;
             state_fp = fopen(statefile, no_act ? "r" : "a+");
@@ -268,6 +280,11 @@ static void read_all_state(const char *argv0, char ***ifaces, int *n_ifaces)
                 fclose(state_fp);
                 state_fp = NULL;
             }
+
+            if (lock_fp != NULL) {
+                fclose(lock_fp);
+                lock_fp = NULL;
+            }
         }
     }
 
@@ -281,11 +298,6 @@ static void read_all_state(const char *argv0, char ***ifaces, int *n_ifaces)
     if (dp != NULL)
     {
         closedir(dp);
-    }
-
-    if (lock_fp != NULL) {
-        fclose(lock_fp);
-        lock_fp = NULL;
     }
 }
 
@@ -301,7 +313,7 @@ static void update_state(const char *argv0, const char *iface, const char *state
 
     check_create_state_dir();
 
-    lock_fp = lock_state(argv0);
+    lock_fp = lock_state(argv0, iface);
 
     sprintf(statefile, statefilepattern, iface);
 
