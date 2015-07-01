@@ -32,6 +32,7 @@ static void update_state(const char *argv0, const char *iface, const char *lifac
 FILE *lock_file(const char *iface);
 static int lock_fd(int fd);
 int is_ancestor(pid_t other_pid);
+interface_defn *find_iface(interfaces_file *defn, const char *iface);
 bool match_patterns(char *string, int argc, char *argv[])
 {
     if (!argc || !argv || !string)
@@ -1050,7 +1051,7 @@ lock_handle *lock_iface(const char *iface)
         return NULL;
     }
 
-    interface_hierarchy *hierarchy = find_iface_hierarchy(defn, iface);
+    interface_hierarchy *hierarchy = find_iface_hierarchy(defn, iface, 0);
     if (hierarchy)
     {
         for (; hierarchy; hierarchy = hierarchy->next)
@@ -1222,3 +1223,19 @@ int is_ancestor(pid_t other_pid)
 
     return 0;
 }
+
+interface_defn *find_iface(interfaces_file *defn, const char *iface)
+{
+    interface_defn *iface_defn = defn->ifaces;
+
+    while (iface_defn)
+    {
+        if ((iface_defn->real_iface && strcmp(iface, iface_defn->real_iface) == 0)
+            || (iface_defn->logical_iface && strcmp(iface, iface_defn->logical_iface) == 0))
+            break;
+        iface_defn = iface_defn->next;
+    }
+
+    return iface_defn;
+}
+

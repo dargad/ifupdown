@@ -97,7 +97,7 @@ struct mapping_defn
 };
 struct interface_hierarchy
 {
-    char *iface;
+    char iface[80];
     long level;
     interface_hierarchy *next;
     interface_hierarchy *prev;
@@ -129,7 +129,7 @@ void convert_variables(char *filename, conversion *conversions,
 interfaces_file *read_interfaces(char *filename);
 interfaces_file *read_interfaces_defn(interfaces_file *defn, char *filename);
 allowup_defn *find_allowup(interfaces_file *defn, char *name);
-interface_hierarchy *find_iface_hierarchy(interfaces_file *defn, const char *iface);
+interface_hierarchy *find_iface_hierarchy(interfaces_file *defn, const char *iface, int starting_level);
 lock_handle *lock_iface(const char *iface);
 int unlock_iface(lock_handle *handle);
 int doit(char *str);
@@ -166,4 +166,5 @@ extern address_family addr_ipx;
 extern address_family addr_can;
 extern address_family addr_meta;
 
+char *next_word(char *buf, char *word, int maxlen);
 #endif /* HEADER_H */

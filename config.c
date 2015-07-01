@@ -11,7 +11,7 @@
 #include <wordexp.h>
 #include <dirent.h>
 static int get_line(char **result, size_t * result_len, FILE * f, int *line);
-static char *next_word(char *buf, char *word, int maxlen);
+/*static char *next_word(char *buf, char *word, int maxlen);*/
 static address_family *get_address_family(address_family * af[], char *name);
 static method *get_method(address_family * af, char *name);
 allowup_defn *get_allowup(allowup_defn ** allowups, char *name);
@@ -617,7 +617,7 @@ static int get_line(char **result, size_t * result_len, FILE * f, int *line)
     return 1;
 }
 
-static char *next_word(char *buf, char *word, int maxlen)
+char *next_word(char *buf, char *word, int maxlen)
 {
     if (!buf)
         return NULL;
@@ -717,35 +717,7 @@ allowup_defn *add_allow_up(char *filename, int line, allowup_defn * allow_up, ch
     return allow_up;
 }
 
-int parse_group(allowup_defn *allow_ups, long *group, long *level)
-{
-    char *next;
-    char *sep = strchr(allow_ups->when, '-');
-
-    if (group == NULL || level == NULL)
-        return -1;
-
-    if (!sep)
-    {
-        *group = -1;
-        *level = -1;
-        return -1;
-    }
-
-    *group = strtol(sep+1, &next, 10);
-    *level = strtol(next+1, NULL, 10);
-
-    if (*group == 0L || *level == 0L)
-    {
-        *group = -1;
-        *level = -1;
-        return -1;
-    }
-
-    return 0;
-}
-
-interface_hierarchy *find_iface_hierarchy(interfaces_file *defn, const char *iface)
+interface_hierarchy *find_iface_hierarchy(interfaces_file *defn, const char *iface, int starting_level)
 {
     interface_hierarchy *result=NULL;
     int iface_num;
@@ -755,46 +727,48 @@ interface_hierarchy *find_iface_hierarchy(interfaces_file *defn, const char *ifa
     long level;
     int found_group = 0;
 
-    allowup_defn *allowups = defn->allowups;
-    for (; allowups && !found_group; allowups = allowups->next) {
-        if (strncmp(allowups->when, "group-", 6) == 0)
+    interface_defn *iface_defn = find_iface(defn, iface);
+    if (iface_defn)
+    {
+        char *depending_ifaces = get_var("depending-interfaces",
+                                         strlen("depending-interfaces"),
+                                         iface_defn);
+
+        if (depending_ifaces)
         {
-            for(iface_num=0; iface_num<allowups->n_interfaces; ++iface_num)
+            char depending_iface[80];
+
+            result = (interface_hierarchy *) malloc(sizeof(interface_hierarchy));
+            strcpy(result->iface, iface);
+            result->level = starting_level;
+            result->next = NULL;
+            result->prev = NULL;
+
+            while (depending_ifaces = next_word(depending_ifaces, depending_iface, 80))
             {
-                if (iface && !strcmp(allowups->interfaces[iface_num], iface))
-                {
-                    if (!parse_group(allowups, &base_group, &base_level))
+                    interface_hierarchy *sub_hierarchy = find_iface_hierarchy(defn, depending_iface, starting_level + 1);
+                    if (sub_hierarchy)
                     {
-                        // identified group of the interface in question
-                        result = malloc(sizeof(interface_hierarchy));
-                        result->iface = iface;
-                        result->level = base_level;
-                        result->next = NULL;
-                        result->prev = NULL;
-                        found_group = 1;
-                        break;
+                        fprintf(stderr, "depending-interface: (starting_level=%d) %s\n", starting_level, depending_iface);
+                        append_sub_hierarchy(result, iface, sub_hierarchy);
+                        if (verbose > 1)
+                            while (sub_hierarchy)
+                            {
+                                fprintf(stderr, "\tsubhierarchy: level=%d %s\n", sub_hierarchy->level, sub_hierarchy->iface);
+                                sub_hierarchy = sub_hierarchy->next;
+                            }
                     }
-                }
+                    else
+                        insert_into_hierarchy(result, depending_iface, starting_level + 1);
             }
         }
-    }
 
-    if (found_group)
-    {
-        allowup_defn *allowups = defn->allowups;
-        for (; allowups ; allowups = allowups->next) {
-            if (strncmp(allowups->when, "group-", 6) == 0)
+        if (result && verbose > 1 && starting_level == 0)
+        {
+            while (result)
             {
-                if (!parse_group(allowups, &group, &level))
-                {
-                    if (group == base_group && level > base_level)
-                    {
-                        for(iface_num=0; iface_num<allowups->n_interfaces; ++iface_num)
-                        {
-                            insert_into_hierarchy(result, allowups->interfaces[iface_num], level);
-                        }
-                    }
-                }
+                fprintf(stderr, "hierarchy: level=%d %s\n", result->level, result->iface);
+                result = result->next;
             }
         }
     }
@@ -819,7 +793,7 @@ int insert_into_hierarchy(interface_hierarchy *hierarchy, char *iface, long leve
 
     new_node = (interface_hierarchy*)malloc(sizeof(interface_hierarchy));
     // the iface string lives long enough, so it's not necessary to make a copy
-    new_node->iface = iface;
+    strcpy(new_node->iface, iface);
     new_node->level = level;
 
     prev->next = new_node;
@@ -827,6 +801,32 @@ int insert_into_hierarchy(interface_hierarchy *hierarchy, char *iface, long leve
     new_node->next = hierarchy;
     if (hierarchy)
         hierarchy->prev = new_node;
+
+    return 0;
+}
+
+int append_sub_hierarchy(interface_hierarchy *hierarchy, char *root_iface,
+                         interface_hierarchy *sub_hierarchy)
+{
+    while (hierarchy)
+    {
+        if (strcmp(hierarchy->iface, root_iface) == 0)
+            break;
+        hierarchy = hierarchy->next;
+    }
+
+    if (hierarchy)
+    {
+        interface_hierarchy *tmp = hierarchy->next;
+        hierarchy->next = sub_hierarchy;
+
+        while (sub_hierarchy->next)
+        {
+            sub_hierarchy = sub_hierarchy->next;
+        }
+
+        sub_hierarchy->next = tmp;
+    }
 
     return 0;
 }
